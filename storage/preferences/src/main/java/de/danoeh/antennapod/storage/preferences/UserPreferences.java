@@ -81,6 +81,7 @@ public abstract class UserPreferences {
     public static final String PREF_HARDWARE_FORWARD_BUTTON = "prefHardwareForwardButton";
     public static final String PREF_HARDWARE_PREVIOUS_BUTTON = "prefHardwarePreviousButton";
     public static final String PREF_FOLLOW_QUEUE = "prefFollowQueue";
+    public static final String PREF_ALWAYS_START_FROM_QUEUE_TOP = "prefAlwaysStartFromQueueTop";
     public static final String PREF_SKIP_KEEPS_EPISODE = "prefSkipKeepsEpisode";
     public static final String PREF_FAVORITE_KEEPS_EPISODE = "prefFavoriteKeepsEpisode";
     public static final String PREF_AUTO_DELETE = "prefAutoDelete";
@@ -115,9 +116,14 @@ public abstract class UserPreferences {
     public static final String PREF_DELETE_REMOVES_FROM_QUEUE = "prefDeleteRemovesFromQueue";
     public static final String PREF_DOWNLOADS_BUTTON_ACTION = "prefDownloadsButtonAction";
     private static final String PREF_AUTOMATIC_EXPORT_FOLDER = "prefAutomaticExportFolder";
+    private static final String PREF_AUTOMATIC_EXPORT_INTERVAL = "prefAutomaticExportInterval";
 
     // Mediaplayer
     private static final String PREF_PLAYBACK_SPEED = "prefPlaybackSpeed";
+    public static final String PREF_PHONE_SPEAKER_TUNING = "prefPhoneSpeakerTuning";
+    public static final String PREF_REDUCE_HARSHNESS = "prefReduceHarshness";
+    public static final String PREF_REDUCE_HARSHNESS_STRENGTH = "prefReduceHarshnessStrength";
+    public static final String PREF_VOICE_LEVELING = "prefVoiceLeveling";
     public static final String PREF_PLAYBACK_SKIP_SILENCE = "prefSkipSilence";
     private static final String PREF_FAST_FORWARD_SECS = "prefFastForwardSecs";
     private static final String PREF_REWIND_SECS = "prefRewindSecs";
@@ -316,6 +322,54 @@ public abstract class UserPreferences {
     }
 
     /**
+     * Returns how often (in days) the automatic backup should run. Defaults to 3 days.
+     */
+    public static int getAutomaticExportIntervalDays() {
+        try {
+            return Integer.parseInt(prefs.getString(PREF_AUTOMATIC_EXPORT_INTERVAL, "3"));
+        } catch (NumberFormatException e) {
+            return 3;
+        }
+    }
+
+    public static void setAutomaticExportIntervalDays(int days) {
+        prefs.edit().putString(PREF_AUTOMATIC_EXPORT_INTERVAL, String.valueOf(days)).apply();
+    }
+
+    /**
+     * Whether to apply a speech-oriented audio tuning while playing through the built-in speaker.
+     */
+    public static boolean isPhoneSpeakerTuningEnabled() {
+        return prefs.getBoolean(PREF_PHONE_SPEAKER_TUNING, false);
+    }
+
+    /**
+     * Whether to roll off harsh high frequencies to make scratchy / bad-mic recordings less
+     * fatiguing. Applies on all outputs.
+     */
+    public static boolean isReduceHarshnessEnabled() {
+        return prefs.getBoolean(PREF_REDUCE_HARSHNESS, false);
+    }
+
+    /**
+     * Strength of the harshness reduction (1 = low, 2 = medium, 3 = high, 4 = very high).
+     */
+    public static int getReduceHarshnessStrength() {
+        try {
+            return Integer.parseInt(prefs.getString(PREF_REDUCE_HARSHNESS_STRENGTH, "2"));
+        } catch (NumberFormatException e) {
+            return 2;
+        }
+    }
+
+    /**
+     * Whether to apply a compressor/limiter that evens out loud and quiet speech (Android 9+).
+     */
+    public static boolean isVoiceLevelingEnabled() {
+        return prefs.getBoolean(PREF_VOICE_LEVELING, false);
+    }
+
+    /**
      * Returns notification priority.
      *
      * @return NotificationCompat.PRIORITY_MAX or NotificationCompat.PRIORITY_DEFAULT
@@ -402,6 +456,14 @@ public abstract class UserPreferences {
      */
     public static void setFollowQueue(boolean value) {
         prefs.edit().putBoolean(UserPreferences.PREF_FOLLOW_QUEUE, value).apply();
+    }
+
+    /**
+     * If true, after an episode finishes, playback continues from the top of the queue instead
+     * of the following episode.
+     */
+    public static boolean isAlwaysStartFromQueueTop() {
+        return prefs.getBoolean(PREF_ALWAYS_START_FROM_QUEUE_TOP, false);
     }
 
     public static boolean shouldSkipKeepEpisode() {

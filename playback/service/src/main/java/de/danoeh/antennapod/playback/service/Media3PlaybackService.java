@@ -1,6 +1,10 @@
 package de.danoeh.antennapod.playback.service;
 
 import android.content.Intent;
+import android.content.SharedPreferences;
+import android.media.AudioDeviceCallback;
+import android.media.AudioDeviceInfo;
+import android.media.AudioManager;
 import android.media.audiofx.LoudnessEnhancer;
 import android.os.Bundle;
 import android.util.Log;
@@ -49,6 +53,8 @@ import de.danoeh.antennapod.playback.base.RewindAfterPauseUtils;
 import de.danoeh.antennapod.playback.cast.CastPlayerWrapper;
 import de.danoeh.antennapod.playback.service.internal.ExoPlayerUtils;
 import de.danoeh.antennapod.playback.service.internal.MediaLibrarySessionCallback;
+import de.danoeh.antennapod.playback.service.internal.PhoneSpeakerEqualizer;
+import de.danoeh.antennapod.playback.service.internal.SpeechCompressor;
 import de.danoeh.antennapod.playback.service.internal.PlayableUtils;
 import de.danoeh.antennapod.playback.service.internal.SkipUtils;
 import de.danoeh.antennapod.playback.service.internal.SleepTimer;
@@ -97,6 +103,12 @@ public class Media3PlaybackService extends MediaLibraryService {
     @Nullable
     private LoudnessEnhancer loudnessEnhancer = null;
     private float volumeAdaptionFactor = 1.0f;
+    private AudioManager audioManager;
+    private PhoneSpeakerEqualizer speakerEqualizer;
+    private SpeechCompressor speechCompressor;
+    private AudioDeviceCallback audioDeviceCallback;
+    private int currentAudioSessionId = 0;
+    private SharedPreferences.OnSharedPreferenceChangeListener audioTuningPrefListener;
 
     @UnstableApi
     @Override
@@ -109,14 +121,44 @@ public class Media3PlaybackService extends MediaLibraryService {
         notificationProvider.setSmallIcon(R.drawable.ic_notification);
         setMediaNotificationProvider(notificationProvider);
 
+        audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
+        speakerEqualizer = new PhoneSpeakerEqualizer();
+        speechCompressor = new SpeechCompressor();
+        audioDeviceCallback = new AudioDeviceCallback() {
+            @Override
+            public void onAudioDevicesAdded(AudioDeviceInfo[] addedDevices) {
+                updateSpeakerTuningRoute();
+            }
+
+            @Override
+            public void onAudioDevicesRemoved(AudioDeviceInfo[] removedDevices) {
+                updateSpeakerTuningRoute();
+            }
+        };
+        if (audioManager != null) {
+            audioManager.registerAudioDeviceCallback(audioDeviceCallback, null);
+        }
+        audioTuningPrefListener = (sharedPreferences, key) -> {
+            if (UserPreferences.PREF_PHONE_SPEAKER_TUNING.equals(key)
+                    || UserPreferences.PREF_REDUCE_HARSHNESS.equals(key)
+                    || UserPreferences.PREF_REDUCE_HARSHNESS_STRENGTH.equals(key)
+                    || UserPreferences.PREF_VOICE_LEVELING.equals(key)) {
+                initSpeakerTuning(currentAudioSessionId);
+            }
+        };
+        getSharedPreferences(getPackageName() + "_preferences", MODE_PRIVATE)
+                .registerOnSharedPreferenceChangeListener(audioTuningPrefListener);
+
         exoPlayer = ExoPlayerUtils.buildPlayer(this);
         exoPlayer.addListener(new Player.Listener() {
             @Override
             public void onAudioSessionIdChanged(int audioSessionId) {
                 initLoudnessEnhancer(audioSessionId);
+                initSpeakerTuning(audioSessionId);
             }
         });
         initLoudnessEnhancer(exoPlayer.getAudioSessionId());
+        initSpeakerTuning(exoPlayer.getAudioSessionId());
         Player maybeCastPlayer = CastPlayerWrapper.wrap(exoPlayer, this);
         player = new ForwardingPlayer(maybeCastPlayer) {
             @Override
@@ -394,6 +436,23 @@ public class Media3PlaybackService extends MediaLibraryService {
         if (loudnessEnhancer != null) {
             loudnessEnhancer.release();
             loudnessEnhancer = null;
+        }
+        if (speakerEqualizer != null) {
+            speakerEqualizer.release();
+            speakerEqualizer = null;
+        }
+        if (speechCompressor != null) {
+            speechCompressor.release();
+            speechCompressor = null;
+        }
+        if (audioManager != null && audioDeviceCallback != null) {
+            audioManager.unregisterAudioDeviceCallback(audioDeviceCallback);
+            audioDeviceCallback = null;
+        }
+        if (audioTuningPrefListener != null) {
+            getSharedPreferences(getPackageName() + "_preferences", MODE_PRIVATE)
+                    .unregisterOnSharedPreferenceChangeListener(audioTuningPrefListener);
+            audioTuningPrefListener = null;
         }
         if (player != null) {
             player.removeListener(playerListener);
@@ -727,7 +786,20 @@ public class Media3PlaybackService extends MediaLibraryService {
             return;
         }
         queueLoaderDisposable = Maybe.fromCallable(() -> {
-            FeedItem nextItem = DBReader.getNextInQueue(item);
+            FeedItem nextItem;
+            if (ended && UserPreferences.isAlwaysStartFromQueueTop()) {
+                // "Continue from top of queue": after an episode finishes, resume from the current
+                // head of the queue rather than the episode that follows the one that played.
+                nextItem = null;
+                for (FeedItem candidate : DBReader.getQueue()) {
+                    if (candidate.getMedia() != null && candidate.getId() != item.getId()) {
+                        nextItem = candidate;
+                        break;
+                    }
+                }
+            } else {
+                nextItem = DBReader.getNextInQueue(item);
+            }
             boolean hasNext = nextItem != null && nextItem.getMedia() != null;
             updateDatabaseAfterPlayback(media, ended, wasSkipped, hasNext);
             if (hasNext) {
@@ -852,6 +924,42 @@ public class Media3PlaybackService extends MediaLibraryService {
             PlaybackPreferences.writeNoMediaPlaying();
             EventBus.getDefault().post(new PlayerStatusEvent());
         }
+    }
+
+    private void initSpeakerTuning(int audioSessionId) {
+        currentAudioSessionId = audioSessionId;
+        if (speakerEqualizer != null) {
+            speakerEqualizer.init(audioSessionId);
+            speakerEqualizer.setOnSpeaker(isOnBuiltInSpeaker());
+        }
+        if (speechCompressor != null) {
+            speechCompressor.init(audioSessionId);
+        }
+    }
+
+    private void updateSpeakerTuningRoute() {
+        if (speakerEqualizer != null) {
+            speakerEqualizer.setOnSpeaker(isOnBuiltInSpeaker());
+        }
+    }
+
+    private boolean isOnBuiltInSpeaker() {
+        if (audioManager == null) {
+            return true;
+        }
+        for (AudioDeviceInfo device : audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)) {
+            switch (device.getType()) {
+                case AudioDeviceInfo.TYPE_WIRED_HEADPHONES:
+                case AudioDeviceInfo.TYPE_WIRED_HEADSET:
+                case AudioDeviceInfo.TYPE_USB_HEADSET:
+                case AudioDeviceInfo.TYPE_BLUETOOTH_A2DP:
+                case AudioDeviceInfo.TYPE_BLUETOOTH_SCO:
+                    return false;
+                default:
+                    break;
+            }
+        }
+        return true;
     }
 
     private void initLoudnessEnhancer(int audioSessionId) {
