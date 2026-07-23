@@ -40,6 +40,30 @@
                 android:key="prefPlaybackSpeedLauncher"
                 android:summary="@string/pref_playback_speed_sum"
                 android:title="@string/playback_speed"/>
+        <SwitchPreferenceCompat
+                android:defaultValue="false"
+                android:key="prefPhoneSpeakerTuning"
+                android:summary="@string/pref_phone_speaker_tuning_sum"
+                android:title="@string/pref_phone_speaker_tuning_title"/>
+        <SwitchPreferenceCompat
+                android:defaultValue="false"
+                android:key="prefReduceHarshness"
+                android:summary="@string/pref_reduce_harshness_sum"
+                android:title="@string/pref_reduce_harshness_title"/>
+        <de.danoeh.antennapod.ui.preferences.preference.MaterialListPreference
+                android:key="prefReduceHarshnessStrength"
+                android:dependency="prefReduceHarshness"
+                android:title="@string/pref_reduce_harshness_strength_title"
+                android:entries="@array/reduceHarshnessStrengthItems"
+                android:entryValues="@array/reduceHarshnessStrengthValues"
+                android:defaultValue="2"
+                android:summary="%s"
+                search:ignore="true" />
+        <SwitchPreferenceCompat
+                android:defaultValue="false"
+                android:key="prefVoiceLeveling"
+                android:summary="@string/pref_voice_leveling_sum"
+                android:title="@string/pref_voice_leveling_title"/>
     </PreferenceCategory>
 
     <PreferenceCategory android:title="@string/reassign_hardware_buttons">
@@ -78,6 +102,12 @@
                 android:key="prefFollowQueue"
                 android:summary="@string/pref_followQueue_sum"
                 android:title="@string/pref_followQueue_title"/>
+        <SwitchPreferenceCompat
+                android:defaultValue="false"
+                android:enabled="true"
+                android:key="prefAlwaysStartFromQueueTop"
+                android:summary="@string/pref_always_start_from_queue_top_sum"
+                android:title="@string/pref_always_start_from_queue_top_title"/>
         <de.danoeh.antennapod.ui.preferences.preference.MaterialListPreference
                 android:defaultValue="30"
                 android:entries="@array/smart_mark_as_played_values"
