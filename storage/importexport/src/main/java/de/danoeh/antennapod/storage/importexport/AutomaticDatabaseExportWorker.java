@@ -40,8 +40,9 @@ public class AutomaticDatabaseExportWorker extends Worker {
         if (UserPreferences.getAutomaticExportFolder() == null) {
             WorkManager.getInstance(context).cancelUniqueWork(WORK_ID_AUTOMATIC_DATABASE_EXPORT);
         } else {
+            int intervalDays = Math.max(1, UserPreferences.getAutomaticExportIntervalDays());
             PeriodicWorkRequest workRequest = new PeriodicWorkRequest.Builder(
-                        AutomaticDatabaseExportWorker.class, 3, TimeUnit.DAYS)
+                        AutomaticDatabaseExportWorker.class, intervalDays, TimeUnit.DAYS)
                     .build();
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(WORK_ID_AUTOMATIC_DATABASE_EXPORT,
                     replace ? ExistingPeriodicWorkPolicy.REPLACE : ExistingPeriodicWorkPolicy.KEEP, workRequest);
@@ -73,18 +74,24 @@ public class AutomaticDatabaseExportWorker extends Worker {
         if (documentFolder == null || !documentFolder.exists() || !documentFolder.canWrite()) {
             throw new IOException("Unable to open export folder");
         }
-        String filename = String.format("AntennaPodBackup-%s.db",
-                new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date()));
-        DocumentFile exportFile = documentFolder.createFile("application/x-sqlite3", filename);
+        String dateStamp = new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date());
+        DocumentFile exportFile = documentFolder.createFile("application/zip",
+                String.format("AntennaPodBackup-%s.zip", dateStamp));
         if (exportFile == null || !exportFile.canWrite()) {
             throw new IOException("Unable to create export file");
         }
-        DatabaseExporter.exportToDocument(exportFile.getUri(), getApplicationContext());
+        CombinedBackupTransporter.exportToDocument(exportFile.getUri(), getApplicationContext());
+
+        deleteOldBackups(documentFolder, "AntennaPodBackup-\\d\\d\\d\\d-\\d\\d-\\d\\d\\.zip");
+    }
+
+    private void deleteOldBackups(DocumentFile documentFolder, String filenameRegex) throws IOException {
         List<DocumentFile> files = new ArrayList<>(Arrays.asList(documentFolder.listFiles()));
         Iterator<DocumentFile> itr = files.iterator();
         while (itr.hasNext()) {
             DocumentFile file = itr.next();
-            if (!file.getName().matches("AntennaPodBackup-\\d\\d\\d\\d-\\d\\d-\\d\\d\\.db")) {
+            String name = file.getName();
+            if (name == null || !name.matches(filenameRegex)) {
                 itr.remove();
             }
         }
@@ -97,7 +104,7 @@ public class AutomaticDatabaseExportWorker extends Worker {
             }
         }
         if (hasDeletionFailed) {
-            throw new IOException("Unable to delete some database backup files");
+            throw new IOException("Unable to delete some backup files");
         }
     }
 
