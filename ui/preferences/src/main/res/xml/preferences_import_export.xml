@@ -14,6 +14,15 @@
                 android:title="@string/automatic_database_export_label"
                 android:summary="@string/automatic_database_export_summary"
                 android:defaultValue="false" />
+        <de.danoeh.antennapod.ui.preferences.preference.MaterialListPreference
+                android:key="prefAutomaticExportInterval"
+                android:dependency="prefAutomaticDatabaseExport"
+                android:title="@string/automatic_export_interval_title"
+                android:entries="@array/automaticExportIntervalItems"
+                android:entryValues="@array/automaticExportIntervalValues"
+                android:defaultValue="3"
+                android:summary="%s"
+                search:ignore="true" />
         <Preference
                 android:key="prefDatabaseImport"
                 search:keywords="@string/import_export_search_keywords"

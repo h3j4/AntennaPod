@@ -16,6 +16,7 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 
 public class DatabaseExporter {
     private static final String TAG = "DatabaseExporter";
@@ -42,7 +43,7 @@ public class DatabaseExporter {
         }
     }
 
-    public static int exportToStream(FileOutputStream outFileStream, Context context) throws IOException {
+    public static int exportToStream(OutputStream outFileStream, Context context) throws IOException {
         File currentDB = context.getDatabasePath(PodDBAdapter.DATABASE_NAME);
         if (!currentDB.exists()) {
             throw new IOException("Cannot access current database");
@@ -76,8 +77,22 @@ public class DatabaseExporter {
     public static void importBackup(Uri inputUri, Context context) throws IOException {
         InputStream inputStream = null;
         try {
-            File tempDB = context.getDatabasePath(TEMP_DB_NAME);
             inputStream = context.getContentResolver().openInputStream(inputUri);
+            if (inputStream == null) {
+                throw new IOException("Unable to open backup file");
+            }
+            importFromStream(inputStream, context);
+        } finally {
+            IOUtils.closeQuietly(inputStream);
+        }
+    }
+
+    /**
+     * Restores the database from the given stream. The caller is responsible for closing the stream.
+     */
+    public static void importFromStream(InputStream inputStream, Context context) throws IOException {
+        try {
+            File tempDB = context.getDatabasePath(TEMP_DB_NAME);
             FileUtils.copyInputStreamToFile(inputStream, tempDB);
 
             SQLiteDatabase db = SQLiteDatabase.openDatabase(tempDB.getAbsolutePath(),
@@ -100,8 +115,6 @@ public class DatabaseExporter {
         } catch (IOException | SQLiteException e) {
             Log.e(TAG, Log.getStackTraceString(e));
             throw e;
-        } finally {
-            IOUtils.closeQuietly(inputStream);
         }
     }
 }
