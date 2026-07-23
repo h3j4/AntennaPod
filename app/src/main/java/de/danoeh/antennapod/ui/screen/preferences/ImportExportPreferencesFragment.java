@@ -31,7 +31,7 @@ import de.danoeh.antennapod.model.feed.FeedItem;
 import de.danoeh.antennapod.model.feed.FeedItemFilter;
 import de.danoeh.antennapod.model.feed.SortOrder;
 import de.danoeh.antennapod.storage.importexport.AutomaticDatabaseExportWorker;
-import de.danoeh.antennapod.storage.importexport.DatabaseExporter;
+import de.danoeh.antennapod.storage.importexport.CombinedBackupTransporter;
 import de.danoeh.antennapod.storage.importexport.FavoritesWriter;
 import de.danoeh.antennapod.storage.importexport.HtmlWriter;
 import de.danoeh.antennapod.storage.importexport.OpmlWriter;
@@ -62,13 +62,14 @@ public class ImportExportPreferencesFragment extends AnimatedPreferenceFragment 
     private static final String PREF_DATABASE_IMPORT = "prefDatabaseImport";
     private static final String PREF_DATABASE_EXPORT = "prefDatabaseExport";
     private static final String PREF_AUTOMATIC_DATABASE_EXPORT = "prefAutomaticDatabaseExport";
+    private static final String PREF_AUTOMATIC_EXPORT_INTERVAL = "prefAutomaticExportInterval";
     private static final String PREF_FAVORITE_EXPORT = "prefFavoritesExport";
     private static final String DEFAULT_OPML_OUTPUT_NAME = "antennapod-feeds-%s.opml";
     private static final String CONTENT_TYPE_OPML = "text/x-opml";
     private static final String DEFAULT_HTML_OUTPUT_NAME = "antennapod-feeds-%s.html";
     private static final String CONTENT_TYPE_HTML = "text/html";
     private static final String DEFAULT_FAVORITES_OUTPUT_NAME = "antennapod-favorites-%s.html";
-    private static final String DATABASE_EXPORT_FILENAME = "AntennaPodBackup-%s.db";
+    private static final String DATABASE_EXPORT_FILENAME = "AntennaPodBackup-%s.zip";
 
     private final ActivityResultLauncher<Intent> chooseOpmlExportPathLauncher =
             registerForActivityResult(new StartActivityForResult(),
@@ -175,6 +176,12 @@ public class ImportExportPreferencesFragment extends AnimatedPreferenceFragment 
                     }
                     return true;
                 });
+        findPreference(PREF_AUTOMATIC_EXPORT_INTERVAL).setOnPreferenceChangeListener(
+                (preference, newValue) -> {
+                    UserPreferences.setAutomaticExportIntervalDays(Integer.parseInt((String) newValue));
+                    AutomaticDatabaseExportWorker.enqueueIfNeeded(getContext(), true);
+                    return true;
+                });
         findPreference(PREF_FAVORITE_EXPORT).setOnPreferenceClickListener(
                 preference -> {
                     openExportPathPicker(Export.FAVORITES, chooseFavoritesExportPathLauncher);
@@ -253,7 +260,7 @@ public class ImportExportPreferencesFragment extends AnimatedPreferenceFragment 
         }
         final Uri uri = result.getData().getData();
         progressDialog.show();
-        disposable = Completable.fromAction(() -> DatabaseExporter.importBackup(uri, getContext()))
+        disposable = Completable.fromAction(() -> CombinedBackupTransporter.importBackup(uri, getContext()))
                 .subscribeOn(Schedulers.computation())
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe(() -> {
@@ -267,11 +274,11 @@ public class ImportExportPreferencesFragment extends AnimatedPreferenceFragment 
             return;
         }
         progressDialog.show();
-        disposable = Completable.fromAction(() -> DatabaseExporter.exportToDocument(uri, getContext()))
+        disposable = Completable.fromAction(() -> CombinedBackupTransporter.exportToDocument(uri, getContext()))
                 .subscribeOn(Schedulers.computation())
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe(() -> {
-                    showExportSuccessSnackbar(uri, "application/x-sqlite3");
+                    showExportSuccessSnackbar(uri, "application/zip");
                     progressDialog.dismiss();
                 }, this::showExportErrorDialog);
     }
@@ -392,7 +399,7 @@ public class ImportExportPreferencesFragment extends AnimatedPreferenceFragment 
     private static class BackupDatabase extends ActivityResultContracts.CreateDocument {
 
         BackupDatabase() {
-            super("application/x-sqlite3");
+            super("application/zip");
         }
 
         @NonNull
@@ -400,7 +407,7 @@ public class ImportExportPreferencesFragment extends AnimatedPreferenceFragment 
         public Intent createIntent(@NonNull final Context context, @NonNull final String input) {
             return super.createIntent(context, input)
                     .addCategory(Intent.CATEGORY_OPENABLE)
-                    .setType("application/x-sqlite3");
+                    .setType("application/zip");
         }
     }
 
