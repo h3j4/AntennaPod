@@ -1,0 +1,206 @@
+name: Rebase mods and build release
+
+# Rebases my-mods-master onto the newest upstream AntennaPod release tag,
+# builds a signed freeRelease APK, and publishes it as a release in this fork.
+#
+# Required repository secrets:
+#   RELEASE_KEYSTORE_BASE64  - your keystore file, base64-encoded
+#   RELEASE_STORE_PASSWORD   - keystore password
+#   RELEASE_KEY_ALIAS        - key alias inside the keystore
+#   RELEASE_KEY_PASSWORD     - password for that key
+
+on:
+  schedule:
+    - cron: '0 7 * * 1'   # Mondays 07:00 UTC
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Upstream tag to rebase onto (blank = newest release tag)'
+        required: false
+        type: string
+      force:
+        description: 'Build even if already rebased onto that tag'
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: build-mods-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  rebase-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out my-mods-master
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: my-mods-master
+          fetch-depth: 0
+
+      - name: Fetch upstream tags
+        run: |
+          git remote add upstream https://github.com/AntennaPod/AntennaPod.git
+          git fetch upstream --tags --force
+
+      - name: Determine target tag
+        id: target
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"
+            if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+              echo "::error::Tag $TAG does not exist upstream"
+              exit 1
+            fi
+          else
+            # Newest stable release tag only (skip betas, RCs, etc.)
+            TAG=$(git tag --list --sort=-v:refname \
+                  | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
+          fi
+          echo "Target tag: $TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+          if git merge-base --is-ancestor "$TAG" HEAD; then
+            echo "Already rebased onto $TAG"
+            echo "needs_rebase=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "needs_rebase=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip if nothing to do
+        id: gate
+        run: |
+          if [ "${{ steps.target.outputs.needs_rebase }}" = "false" ] \
+             && [ "${{ inputs.force }}" != "true" ]; then
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            echo "### Nothing to do — already on ${{ steps.target.outputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Rebase onto target tag
+        if: steps.gate.outputs.proceed == 'true' && steps.target.outputs.needs_rebase == 'true'
+        id: rebase
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          if ! git rebase "${{ steps.target.outputs.tag }}"; then
+            git rebase --abort || true
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+            echo "::error::Rebase onto ${{ steps.target.outputs.tag }} hit conflicts. Resolve locally."
+            exit 1
+          fi
+
+      - name: Open an issue if the rebase conflicted
+        if: failure() && steps.rebase.outputs.conflict == 'true'
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const tag = '${{ steps.target.outputs.tag }}';
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Rebase onto ${tag} needs manual conflict resolution`,
+              body: [
+                `Automatic rebase of \`my-mods-master\` onto upstream tag \`${tag}\` hit conflicts and was aborted.`,
+                '',
+                'Resolve locally:',
+                '```',
+                'git fetch upstream --tags',
+                `git rebase ${tag}`,
+                '# fix conflicts, then: git rebase --continue',
+                'git push --force-with-lease origin my-mods-master',
+                '```',
+                '',
+                `[Workflow run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`
+              ].join('\n')
+            });
+
+      - name: Set up JDK 21
+        if: steps.gate.outputs.proceed == 'true'
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Cache Gradle
+        if: steps.gate.outputs.proceed == 'true'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle', 'gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      # Secrets are passed through the step environment, never interpolated into the
+      # shell script body and never placed on a command line, so they do not land in
+      # an on-disk script or in any process's argv.
+      - name: Decode keystore
+        if: steps.gate.outputs.proceed == 'true'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::RELEASE_KEYSTORE_BASE64 secret is not set"
+            exit 1
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          echo "Keystore written ($(stat -c%s "$RUNNER_TEMP/release.jks") bytes)"
+
+      # Gradle reads ORG_GRADLE_PROJECT_<name> env vars as project properties, which is
+      # what app/build.gradle's signingConfigs.releaseConfig already looks for.
+      - name: Build signed freeRelease APK
+        if: steps.gate.outputs.proceed == 'true'
+        env:
+          ORG_GRADLE_PROJECT_releaseStoreFile: ${{ runner.temp }}/release.jks
+          ORG_GRADLE_PROJECT_releaseStorePassword: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          ORG_GRADLE_PROJECT_releaseKeyAlias: ${{ secrets.RELEASE_KEY_ALIAS }}
+          ORG_GRADLE_PROJECT_releaseKeyPassword: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleFreeRelease --no-daemon --stacktrace
+
+      - name: Shred keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.jks"
+
+      - name: Locate APK
+        if: steps.gate.outputs.proceed == 'true'
+        id: apk
+        run: |
+          APK=$(find app/build/outputs/apk -name '*.apk' ! -name '*unsigned*' | head -n 1)
+          if [ -z "$APK" ]; then
+            echo "::error::No APK produced"
+            find app/build/outputs -type f -name '*.apk' || true
+            exit 1
+          fi
+          VERSION=$(grep -m1 'versionName' app/build.gradle | sed -E 's/.*"(.*)".*/\1/')
+          DEST="AntennaPod-mods-${VERSION}.apk"
+          cp "$APK" "$DEST"
+          echo "path=$DEST" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Push rebased branch
+        if: steps.gate.outputs.proceed == 'true' && steps.target.outputs.needs_rebase == 'true'
+        run: git push --force-with-lease origin my-mods-master
+
+      - name: Publish release
+        if: steps.gate.outputs.proceed == 'true'
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          tag_name: v${{ steps.apk.outputs.version }}-mods
+          name: AntennaPod ${{ steps.apk.outputs.version }} + mods
+          body: |
+            Personal build: upstream AntennaPod `${{ steps.target.outputs.tag }}` with local
+            modifications (continue-from-queue-top, combined database+settings backup,
+            phone-speaker EQ / harshness reduction / voice leveling) rebased on top.
+
+            Signed with the personal release keystore — installs as an update over previous
+            builds from this same keystore, but **not** over the Google Play build.
+          files: ${{ steps.apk.outputs.path }}
+          fail_on_unmatched_files: true
